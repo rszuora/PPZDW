@@ -25,6 +25,10 @@ if [ ! $# == 3 ]; then
   exit
 fi
 
+# Redirect stdout ( > ) into a named pipe ( >() ) running "tee"
+exec > >(tee PPZDW.log)
+exec 2>&1
+
 USER_NAME=$2
 PASSWORD=$3
 TENANT=$1
@@ -78,9 +82,9 @@ get_aqua_result_file() {
     #
     #  And now it's time to post process the results file, they have a bunch of HTTP 
     #  header info in them that has to be stripped out, the tail -n+12 tails the entire
-    #  file but starting at line 12
+    #  file but starting at line 12 and the sed strips out any blank lines
     #
-    tail -n+12 $RFOLDER/file_$FID.txt > $RFOLDER/$FID.csv
+    tail -n+12 $RFOLDER/file_$FID.txt  | sed -e '/^[[:space:]]*$/d' > $RFOLDER/$FID.csv
   else
     mv $RFOLDER/file_$FID.txt $RFOLDER/file_$FID.fail
     echo "Aqua Results File $FID pull failed! Review contents of $RFOLDER/file_$FID.fail for clues"
@@ -128,17 +132,20 @@ fi
 #  Make a directory for the results files
 #
 mkdir "$JOBID"
+mv curl_aqua_results.txt $JOBID/curl_aqua_results.txt
+mv file_ready_check.txt $JOBID/file_ready_check.txt
+
 #
 #  Time to grab the file ids and then the files, the grep parses out and grabs the 
 #  file ids and sticks them in file_ids.txt
 #  
-grep fileId file_ready_check.txt | cut -d : -f2 | cut -d , -f1 | sed -e 's/[[:space:]]//g' -e 's/^"//'  -e 's/"$//' > file_ids.txt
+grep fileId $JOBID/file_ready_check.txt | cut -d : -f2 | cut -d , -f1 | sed -e 's/[[:space:]]//g' -e 's/^"//'  -e 's/"$//' > $JOBID/file_ids.txt
 #
 #
 #  This while loop grabs a file each time round from file_ids.txt and sticks the results in a folder
 #  named after the Aqua JOB ID - ergo there will always be a unique folder name
 #
-while read RFILEID; do get_aqua_result_file $RFILEID $JOBID; done < file_ids.txt
+while read RFILEID; do get_aqua_result_file $RFILEID $JOBID; done < $JOBID/file_ids.txt
 
 #
 #  Time to actually build the data warehouse, the first column is used to determine the table
@@ -191,11 +198,11 @@ while read RFNAME; do
   /bin/rm -f $RFNAME
   /bin/mv $RFNAME.tmp $RFNAME
   
-  TABLENAME=`head -1 $RFNAME | cut -d : -f1 | sed -e 's/[[:space:]]//g' -e 's/^"//'  -e 's/"$//'`
+  TABLENAME=`head -1 $RFNAME | cut -d : -f1 | sed -e 's/[[:space:]]//g' -e 's/^"//' -e 's/"$//'`
   echo "Table $TABLENAME with columns "
 
   TARGET=`head -1 $RFNAME | cut -d : -f1`  
-  COLNAMES=`head -1 $RFNAME | sed -e "s/$TARGET://g" -e 's/[[:space:]]//g' -e 's/^"//'  -e 's/"$//'`
+  COLNAMES=`head -1 $RFNAME | sed -e "s/$TARGET://g" -e 's/[[:space:]]//g' -e 's/\///' -e 's/^"//' -e 's/"$//'`
   echo "create table $TABLENAME($COLNAMES);"
   echo "create table $TABLENAME($COLNAMES);" >> $DBBUILDFILE
   echo ".import $TABLENAME.sql $TABLENAME"  >> $DBBUILDFILE
@@ -206,9 +213,4 @@ while read RFNAME; do
 done < $JOBID/load_files.txt
 unset IFS
 
-#
-#  Let's actually build the database
-#
-sqlite3 $JOBID/PPZDW.sqlite < $JOBID/PPZDW.sql
-
-
+echo "Change to $JOBID  and run sqlite3 PPZDW.sqlite < PPZDW.sql "
